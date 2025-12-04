@@ -1,167 +1,139 @@
-# LearnLynk – Technical Assessment 
+# LearnLynk – Technical Assessment
 
-Thanks for taking the time to complete this assessment. The goal is to understand how you think about problems and how you structure real project work. This is a small, self-contained exercise that should take around **2–3 hours**. It’s completely fine if you don’t finish everything—just note any assumptions or TODOs.
+## Tech Stack
 
-We use:
-
-- **Supabase Postgres**
-- **Supabase Edge Functions (TypeScript)**
-- **Next.js + TypeScript**
-
-You may use your own free Supabase project.
+- **Database**: Supabase Postgres
+- **Backend**: Supabase Edge Functions (TypeScript/Deno)
+- **Frontend**: Next.js + TypeScript
 
 ---
 
-## Overview
+## Project Structure
 
-There are four technical tasks:
+```
+backend/
+├── schema.sql                    # Database schema (Task 1)
+├── rls_policies.sql              # Row-Level Security policies (Task 2)
+└── edge-functions/
+    └── create-task/
+        └── index.ts              # Edge Function API (Task 3)
 
-1. Database schema — `backend/schema.sql`  
-2. RLS policies — `backend/rls_policies.sql`  
-3. Edge Function — `backend/edge-functions/create-task/index.ts`  
-4. Next.js page — `frontend/pages/dashboard/today.tsx`  
-
-There is also a short written question about Stripe in this README.
-
-Feel free to use Supabase/PostgreSQL docs, or any resource you normally use.
+frontend/
+├── pages/
+│   ├── index.tsx                 # Redirects to dashboard
+│   └── dashboard/
+│       └── today.tsx             # Today's tasks page (Task 4)
+├── lib/
+│   └── supabaseClient.ts         # Supabase client setup
+├── package.json
+└── .env.local                    # Environment variables (not committed)
+```
 
 ---
 
-## Task 1 — Database Schema
+## Setup Instructions
 
-File: `backend/schema.sql`
+### 1. Create a Supabase Project
 
-Create the following tables:
+1. Go to [supabase.com](https://supabase.com) and create a new project
+2. Note your **Project URL** and **API keys** from Settings → Data API
 
-- `leads`  
-- `applications`  
-- `tasks`  
+### 2. Set Up the Database
 
-Each table should include standard fields:
+Run these SQL files in the Supabase SQL Editor (in order):
 
-```sql
-id uuid primary key default gen_random_uuid(),
-tenant_id uuid not null,
-created_at timestamptz default now(),
-updated_at timestamptz default now()
+1. `backend/schema.sql` - Creates all tables with indexes and constraints
+2. `backend/rls_policies.sql` - Enables Row-Level Security on leads
+
+### 3. Configure the Frontend
+
+```bash
+cd frontend
+npm install
 ```
 
-Additional requirements:
+Create `frontend/.env.local`:
 
-- `applications.lead_id` → FK to `leads.id`  
-- `tasks.application_id` → FK to `applications.id`  
-- `tasks.type` should only allow: `call`, `email`, `review`  
-- `tasks.due_at >= tasks.created_at`  
-- Add reasonable indexes for typical queries:  
-  - Leads: `tenant_id`, `owner_id`, `stage`  
-  - Applications: `tenant_id`, `lead_id`  
-  - Tasks: `tenant_id`, `due_at`, `status`  
+```
+NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
+```
+
+### 4. Run the Application
+
+```bash
+npm run dev
+```
+
+Visit: `http://localhost:3000`
 
 ---
 
-## Task 2 — Row-Level Security
+## Implementation Summary
 
-File: `backend/rls_policies.sql`
+### Task 1: Database Schema
 
-We want:
+**File**: `backend/schema.sql`
 
-- Counselors can see:
-  - Leads they own, or  
-  - Leads assigned to any team they belong to  
-- Admins can see all leads belonging to their tenant
+Tables created:
+- `users` - User accounts with roles (admin/counselor)
+- `teams` - Teams within tenants
+- `user_teams` - Junction table for user-team membership
+- `lead_teams` - Junction table for lead-team assignment
+- `leads` - Lead records with owner and stage tracking
+- `applications` - Applications linked to leads
+- `tasks` - Tasks linked to applications
 
-Assume the existence of:
+Key constraints:
+- `tasks.type` restricted to: `call`, `email`, `review`
+- `tasks.due_at >= tasks.created_at` enforced
+- Foreign keys with cascade delete
+- Indexes on frequently queried columns
 
-```
-users(id, tenant_id, role)
-teams(id, tenant_id)
-user_teams(user_id, team_id)
-```
+### Task 2: Row-Level Security
 
-JWT contains:
+**File**: `backend/rls_policies.sql`
 
-- `user_id`
-- `role`
-- `tenant_id`
+Policies implemented:
+- **SELECT**: Admins see all tenant leads; Counselors see owned leads + team-assigned leads
+- **INSERT**: Admins and counselors can insert leads for their tenant only
 
-Tasks:
+### Task 3: Edge Function
 
-1. Enable RLS on `leads`  
-2. Write a **SELECT** policy enforcing the rules above  
-3. Write an **INSERT** policy that allows counselors/admins to add leads under their tenant  
+**File**: `backend/edge-functions/create-task/index.ts`
 
----
+POST endpoint that:
+- Validates `task_type` (call/email/review)
+- Validates `due_at` is a future timestamp
+- Fetches `tenant_id` from the application
+- Inserts task and returns `{ success: true, task_id: "..." }`
+- Returns 400 for validation errors, 500 for server errors
 
-## Task 3 — Edge Function: create-task
+### Task 4: Frontend Dashboard
 
-File: `backend/edge-functions/create-task/index.ts`
+**File**: `frontend/pages/dashboard/today.tsx`
 
-Write a simple POST endpoint that:
-
-### Input:
-```json
-{
-  "application_id": "uuid",
-  "task_type": "call",
-  "due_at": "2025-01-01T12:00:00Z"
-}
-```
-
-### Requirements:
-- Validate:
-  - `task_type` is `call`, `email`, or `review`
-  - `due_at` is a valid *future* timestamp  
-- Insert a row into `tasks` using the service role key  
-- Return:
-
-```json
-{ "success": true, "task_id": "..." }
-```
-
-On validation error → return **400**  
-On internal errors → return **500**
+Features:
+- Fetches tasks due today (status ≠ completed)
+- Displays type, application_id, due_at, status in a table
+- "Mark Complete" button updates task status
 
 ---
 
-## Task 4 — Frontend Page: `/dashboard/today`
-
-File: `frontend/pages/dashboard/today.tsx`
-
-Build a small page that:
-
-- Fetches tasks due **today** (status ≠ completed)  
-- Uses the provided Supabase client  
-- Displays:  
-  - type  
-  - application_id  
-  - due_at  
-  - status  
-- Adds a “Mark Complete” button that updates the task in Supabase  
-
----
-
-## Task 5 — Stripe Checkout (Written Answer)
-
-Add a section titled:
-
-```
 ## Stripe Answer
-```
 
-Write **8–12 lines** describing how you would implement a Stripe Checkout flow for an application fee, including:
+To implement a Stripe Checkout flow for an application fee:
 
-- When you insert a `payment_requests` row  
-- When you call Stripe  
-- What you store from the checkout session  
-- How you handle webhooks  
-- How you update the application after payment succeeds  
+1. **Insert `payment_requests` row**: When a user initiates payment (e.g., clicks "Pay Application Fee"), insert a row with `application_id`, `amount`, `status: 'pending'`, and `created_at`.
 
----
+2. **Create Stripe Checkout Session**: Call `stripe.checkout.sessions.create()` with the fee amount, success/cancel URLs, and include `payment_request_id` in the metadata. Store the returned `session_id` in the `payment_requests` row.
 
-## Submission
+3. **Redirect user**: Send the user to `session.url` to complete payment on Stripe's hosted checkout page.
 
-1. Push your work to a public GitHub repo.  
-2. Add your Stripe answer at the bottom of this file.  
-3. Share the link.
+4. **Webhook handling**: Set up a webhook endpoint listening for `checkout.session.completed`. Verify the webhook signature using Stripe's signing secret to ensure authenticity.
 
-Good luck.
+5. **Process successful payment**: In the webhook handler, extract `payment_request_id` from session metadata, update `payment_requests.status` to `'completed'`, and store `payment_intent_id` for reference.
+
+6. **Update application**: After confirming payment, update the `applications` table to reflect payment status (e.g., `payment_status: 'paid'`, `paid_at: now()`), potentially triggering the next stage in the application workflow.
+
+7. **Handle failures**: For `checkout.session.expired` or failed payments, update `payment_requests.status` to `'failed'` and notify the user to retry.

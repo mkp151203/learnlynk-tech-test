@@ -2,24 +2,49 @@
 
 alter table public.leads enable row level security;
 
--- Example helper: assume JWT has tenant_id, user_id, role.
--- You can use: current_setting('request.jwt.claims', true)::jsonb
+-- Helper function to get JWT claims
+-- JWT contains: user_id, role, tenant_id
 
--- TODO: write a policy so:
--- - counselors see leads where they are owner_id OR in one of their teams
--- - admins can see all leads of their tenant
-
-
--- Example skeleton for SELECT (replace with your own logic):
-
+-- SELECT policy: 
+-- - Counselors can see leads they own OR leads assigned to teams they belong to
+-- - Admins can see all leads in their tenant
 create policy "leads_select_policy"
 on public.leads
 for select
 using (
-  true
-  -- TODO: add real RLS logic here, refer to README instructions
+  -- Must be in same tenant
+  tenant_id = (current_setting('request.jwt.claims', true)::jsonb->>'tenant_id')::uuid
+  AND (
+    -- Admin: can see all leads in their tenant
+    (current_setting('request.jwt.claims', true)::jsonb->>'role' = 'admin')
+    OR
+    -- Counselor: can see leads they own
+    (current_setting('request.jwt.claims', true)::jsonb->>'role' = 'counselor'
+     AND (
+       owner_id = (current_setting('request.jwt.claims', true)::jsonb->>'user_id')::uuid
+       OR
+       -- Counselor: can see leads assigned to teams they belong to
+       EXISTS (
+         SELECT 1 
+         FROM public.lead_teams lt
+         INNER JOIN public.user_teams ut ON ut.team_id = lt.team_id
+         WHERE lt.lead_id = leads.id
+         AND ut.user_id = (current_setting('request.jwt.claims', true)::jsonb->>'user_id')::uuid
+       )
+     )
+    )
+  )
 );
 
--- TODO: add INSERT policy that:
--- - allows counselors/admins to insert leads for their tenant
--- - ensures tenant_id is correctly set/validated
+-- INSERT policy:
+-- - Counselors and admins can insert leads for their own tenant
+create policy "leads_insert_policy"
+on public.leads
+for insert
+with check (
+  -- User must be admin or counselor
+  (current_setting('request.jwt.claims', true)::jsonb->>'role' in ('admin', 'counselor'))
+  AND
+  -- Lead's tenant_id must match the user's tenant_id
+  tenant_id = (current_setting('request.jwt.claims', true)::jsonb->>'tenant_id')::uuid
+);
